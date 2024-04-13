@@ -1,7 +1,6 @@
 package com.example.handwrittingtranslator
 
 import android.Manifest
-import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
@@ -18,7 +17,6 @@ import androidx.camera.core.Preview
 import androidx.camera.core.CameraSelector
 import android.util.Log
 import android.widget.TextView
-import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import com.example.handwrittingtranslator.databinding.ActivityMainBinding
@@ -33,8 +31,10 @@ class MainActivity : AppCompatActivity()
     private lateinit var cameraExecutor: ExecutorService
     private var countdownTimer: CountDownTimer? = null
     private var imageCapture: ImageCapture? = null
+    private lateinit var translationText:  TextView
 
     val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+
 
     override fun onCreate(savedInstanceState: Bundle?)
     {
@@ -42,6 +42,7 @@ class MainActivity : AppCompatActivity()
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        translationText = binding.tvTranslation
         cameraExecutor = Executors.newSingleThreadExecutor()
         cameraExecutor = Executors.newSingleThreadExecutor()
         if (allPermissionsGranted())
@@ -55,6 +56,7 @@ class MainActivity : AppCompatActivity()
         }
     }
 
+
     private fun processFrame(image: ImageProxy)
     {
         val inputImage = InputImage.fromMediaImage(image.image!!, image.imageInfo.rotationDegrees)
@@ -63,8 +65,7 @@ class MainActivity : AppCompatActivity()
             .addOnSuccessListener { visionText ->
                 val recognizedText = visionText.text
                 Log.d("debug_tag", "Recognizing text!")
-                Log.d("debug_tag", recognizedText)
-
+                translationText.text = recognizedText
 
             }
             .addOnFailureListener { e ->
