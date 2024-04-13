@@ -5,6 +5,7 @@ import android.content.ContentValues
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.os.CountDownTimer
 import androidx.appcompat.app.AppCompatActivity
 import androidx.camera.core.ImageCapture
 import androidx.core.content.ContextCompat
@@ -18,85 +19,61 @@ import androidx.camera.core.CameraSelector
 import android.util.Log
 import android.widget.TextView
 import androidx.camera.core.ImageAnalysis
+import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import com.example.handwrittingtranslator.databinding.ActivityMainBinding
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
-import java.nio.ByteBuffer
 
-
-typealias LumaListener = (luma: Double) -> Unit
 
 class MainActivity : AppCompatActivity()
 {
-    private lateinit var viewBinding: ActivityMainBinding
-
+    private lateinit var binding: ActivityMainBinding
+    private lateinit var cameraExecutor: ExecutorService
+    private var countdownTimer: CountDownTimer? = null
     private var imageCapture: ImageCapture? = null
 
-
-    private lateinit var cameraExecutor: ExecutorService
-    private lateinit var tvCountDown: TextView
-    private lateinit var tvTranslation: TextView
-
-
-    // When using Chinese script library
     val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
 
     override fun onCreate(savedInstanceState: Bundle?)
     {
         super.onCreate(savedInstanceState)
-        viewBinding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(viewBinding.root)
-
-        // Request camera permissions
-        if (allPermissionsGranted())
-            startCamera()
-        else
-            requestPermissions()
+        binding = ActivityMainBinding.inflate(layoutInflater)
+        setContentView(binding.root)
 
         cameraExecutor = Executors.newSingleThreadExecutor()
-        tvCountDown = viewBinding.tvCountdown
-        tvTranslation = viewBinding.tvTranslation
+        cameraExecutor = Executors.newSingleThreadExecutor()
+        if (allPermissionsGranted())
+        {
+            startCamera()
+            startCountdown()
+        }
+        else
+        {
+            requestPermissions()
+        }
     }
 
     private fun processFrame(image: ImageProxy)
     {
-        // Convert the ImageProxy to InputImage
         val inputImage = InputImage.fromMediaImage(image.image!!, image.imageInfo.rotationDegrees)
 
-        // Process the image with the text recognizer
         recognizer.process(inputImage)
             .addOnSuccessListener { visionText ->
-                // Process the recognized text
                 val recognizedText = visionText.text
-                Log.e("debug_tag", recognizedText)
+                Log.d("debug_tag", "Recognizing text!")
+                Log.d("debug_tag", recognizedText)
 
-                // Translate the recognized text to the desired language
-                translateText(recognizedText, "PT") { translatedText ->
-                    // Display the original and translated text on the screen
-                    displayTextOnScreen(recognizedText, translatedText)
-                }
+
             }
             .addOnFailureListener { e ->
-                Log.e("debug_tag", "Text recognition failed: ${e.message}", e)
+                Log.e("debug_tag", "Text recognition failed", e)
             }
             .addOnCompleteListener {
                 image.close()
             }
     }
-
-    private fun translateText(text: String, targetLanguage: String, callback: (String) -> Unit)
-    {
-        // Implement translation logic using a translation service (e.g., Google Translate API)
-        // This part depends on the translation service you choose to use
-    }
-
-    private fun displayTextOnScreen(originalText: String, translatedText: String)
-    {
-        // Update UI to display original and translated text
-    }
-
 
     private fun startCamera()
     {
@@ -105,24 +82,13 @@ class MainActivity : AppCompatActivity()
         cameraProviderFuture.addListener({
             val cameraProvider = cameraProviderFuture.get()
 
-            // Set up the preview use case
             val preview = Preview.Builder().build()
                 .also {
-                    it.setSurfaceProvider(viewBinding.viewFinder.surfaceProvider)
+                    it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
                 }
 
-            // Set up the image analysis use case
-            val imageAnalyzer = ImageAnalysis.Builder()
-                .build()
-                .also {
-                    it.setAnalyzer(cameraExecutor, ImageAnalysis.Analyzer { image ->
-                        // Process each frame from the camera preview
-                        Log.d("debug_tag", "Passing frame")
-                        processFrame(image)
-                    })
-                }
+            imageCapture = ImageCapture.Builder().build()
 
-            // Select back camera as the default
             val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
             try
@@ -130,8 +96,8 @@ class MainActivity : AppCompatActivity()
                 // Unbind any existing use cases before binding new ones
                 cameraProvider.unbindAll()
 
-                // Bind the preview and image analysis use cases to the camera
-                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageAnalyzer)
+                // Bind the preview and image capture use cases to the camera
+                cameraProvider.bindToLifecycle(this, cameraSelector, preview, imageCapture)
             }
             catch (exc: Exception)
             {
@@ -140,35 +106,50 @@ class MainActivity : AppCompatActivity()
         }, ContextCompat.getMainExecutor(this))
     }
 
+    private fun startCountdown()
+    {
+        countdownTimer = object : CountDownTimer(10000, 1000)
+        {
+            override fun onTick(millisUntilFinished: Long)
+            {
+                val secondsUntilNextExtraction = millisUntilFinished / 1000
+                binding.tvCountdown.text =
+                    "Countdown until next translation: $secondsUntilNextExtraction seconds"
+            }
+
+            override fun onFinish()
+            {
+                // Restart the countdown
+                start()
+                // Trigger image capture and text recognition here
+                imageCapture?.takePicture(
+                    ContextCompat.getMainExecutor(this@MainActivity),
+                    object : ImageCapture.OnImageCapturedCallback()
+                    {
+                        override fun onCaptureSuccess(image: ImageProxy)
+                        {
+                            processFrame(image)
+                        }
+
+                        override fun onError(exception: ImageCaptureException)
+                        {
+                            Log.e(TAG, "Image capture failed: ${exception.message}", exception)
+                        }
+                    })
+            }
+        }.start()
+    }
+
 
     private fun requestPermissions()
     {
         activityResultLauncher.launch(REQUIRED_PERMISSIONS)
     }
 
-    private fun processImage(image: InputImage)
-    {
-        recognizer.process(image)
-            .addOnSuccessListener { visionText ->
-                // Task completed successfully
-                // Handle text recognition results here
-                val resultText = visionText.text
-//                Toast.makeText(this, resultText, Toast.LENGTH_LONG).show()
-                Log.i("debug_tag", resultText)
-                // Do something with the recognized text
-            }
-            .addOnFailureListener { e ->
-                // Task failed with an exception
-                // Handle error
-            }
-    }
-
-
     private val activityResultLauncher =
         registerForActivityResult(
             ActivityResultContracts.RequestMultiplePermissions()
-        )
-        { permissions ->
+        ) { permissions ->
             // Handle Permission granted/rejected
             var permissionGranted = true
             permissions.entries.forEach {
@@ -204,7 +185,7 @@ class MainActivity : AppCompatActivity()
     companion object
     {
         private const val TAG = "CameraXApp"
-        private const val FILENAME_FORMAT = "yyyy-MM-dd-HH-mm-ss-SSS"
+        private const val FILENAME_FORMAT = "ss-SSS"
         private val REQUIRED_PERMISSIONS =
             mutableListOf(
                 Manifest.permission.CAMERA,
