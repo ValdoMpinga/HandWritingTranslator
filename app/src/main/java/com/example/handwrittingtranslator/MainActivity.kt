@@ -26,6 +26,12 @@ import android.widget.TextView
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
+import com.aallam.openai.api.chat.ChatCompletion
+import com.aallam.openai.api.chat.ChatCompletionRequest
+import com.aallam.openai.api.chat.ChatMessage
+import com.aallam.openai.api.chat.ChatRole
+import com.aallam.openai.api.model.ModelId
+import com.aallam.openai.client.OpenAI
 import com.example.handwrittingtranslator.databinding.ActivityMainBinding
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
@@ -34,8 +40,10 @@ import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
 import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
-
-
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import java.util.regex.Pattern
 
 class MainActivity : AppCompatActivity(), SensorEventListener
 {
@@ -43,12 +51,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener
     private lateinit var cameraExecutor: ExecutorService
     private var countdownTimer: CountDownTimer? = null
     private var imageCapture: ImageCapture? = null
-    private lateinit var translationView : TextView
-    private lateinit var chineseView : TextView
-    private lateinit var devanagariView : TextView
-    private lateinit var japaneseView : TextView
-    private lateinit var koreanView : TextView
-    enum class SelectedLanguage {
+    private lateinit var translationView: TextView
+    private lateinit var chineseView: TextView
+    private lateinit var devanagariView: TextView
+    private lateinit var japaneseView: TextView
+    private lateinit var koreanView: TextView
+
+    enum class SelectedLanguage
+    {
         CHINESE,
         DEVANAGARI,
         JAPANESE,
@@ -56,16 +66,34 @@ class MainActivity : AppCompatActivity(), SensorEventListener
     }
 
     lateinit var recognizerInstance: TextRecognizer
-    private val chineseRecognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
-    private val devanagariRecognizer = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
-    private val japaneseRecognizer = TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
-    private val koreanRecognizer = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+    private val chineseRecognizer =
+        TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    private val devanagariRecognizer =
+        TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+    private val japaneseRecognizer =
+        TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
+    private val koreanRecognizer =
+        TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
 
 
     private lateinit var mSensorManager: SensorManager
     private lateinit var mSensor: Sensor
     private var selectedLanguage: SelectedLanguage = SelectedLanguage.CHINESE
+    private val openAI = OpenAI("YOU WISH!")
 
+    private fun extractContent(textContent: String?): String
+    {
+        val pattern = Pattern.compile("content=(.*?)[,}]")
+        val matcher = pattern.matcher(textContent ?: "")
+        return if (matcher.find())
+        {
+            matcher.group(1)
+        }
+        else
+        {
+            ""
+        }
+    }
 
     override fun onCreate(savedInstanceState: Bundle?)
     {
@@ -73,7 +101,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        translationView  = binding.tvTranslation
+
+        translationView = binding.tvTranslation
         chineseView = binding.tvChinese
         devanagariView = binding.tvDevanagari
         japaneseView = binding.tvJapanese
@@ -86,8 +115,13 @@ class MainActivity : AppCompatActivity(), SensorEventListener
         mSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
         cameraExecutor = Executors.newSingleThreadExecutor()
 
-        if (mSensor == null) {
-            Toast.makeText(this, "Proximity sensor is not available on this device", Toast.LENGTH_SHORT).show()
+        if (mSensor == null)
+        {
+            Toast.makeText(
+                this,
+                "Proximity sensor is not available on this device",
+                Toast.LENGTH_SHORT
+            ).show()
         }
 
         if (allPermissionsGranted())
@@ -105,7 +139,8 @@ class MainActivity : AppCompatActivity(), SensorEventListener
     {
         val inputImage = InputImage.fromMediaImage(image.image!!, image.imageInfo.rotationDegrees)
 
-        when (selectedLanguage){
+        when (selectedLanguage)
+        {
             SelectedLanguage.CHINESE -> recognizerInstance = chineseRecognizer
             SelectedLanguage.DEVANAGARI -> recognizerInstance = devanagariRecognizer
             SelectedLanguage.KOREAN -> recognizerInstance = koreanRecognizer
@@ -115,10 +150,9 @@ class MainActivity : AppCompatActivity(), SensorEventListener
         recognizerInstance.process(inputImage)
             .addOnSuccessListener { visionText ->
                 val recognizedText = visionText.text
-                Log.d("debug_tag", "Recognizing text!")
-                Log.d("debug_tag", recognizedText)
-                translationView.text = recognizedText
-
+                translateTextToPortuguese(recognizedText) { translatedText ->
+                    translationView.text = translatedText
+                }
             }
             .addOnFailureListener { e ->
                 Log.e("debug_tag", "Text recognition failed", e)
@@ -128,12 +162,14 @@ class MainActivity : AppCompatActivity(), SensorEventListener
             }
     }
 
-    override fun onResume() {
+    override fun onResume()
+    {
         super.onResume()
         mSensorManager.registerListener(this, mSensor, SensorManager.SENSOR_DELAY_NORMAL)
     }
 
-    override fun onPause() {
+    override fun onPause()
+    {
         super.onPause()
         mSensorManager.unregisterListener(this)
     }
@@ -144,12 +180,16 @@ class MainActivity : AppCompatActivity(), SensorEventListener
         // Not used
     }
 
-    override fun onSensorChanged(event: SensorEvent) {
-        if (event.sensor.type == Sensor.TYPE_PROXIMITY) {
+    override fun onSensorChanged(event: SensorEvent)
+    {
+        if (event.sensor.type == Sensor.TYPE_PROXIMITY)
+        {
             val distance = event.values[0]
-            if (distance < mSensor.maximumRange) {
+            if (distance < mSensor.maximumRange)
+            {
                 // Rotate to the next language in enum order
-                selectedLanguage = when (selectedLanguage) {
+                selectedLanguage = when (selectedLanguage)
+                {
                     SelectedLanguage.CHINESE -> SelectedLanguage.DEVANAGARI
                     SelectedLanguage.DEVANAGARI -> SelectedLanguage.JAPANESE
                     SelectedLanguage.JAPANESE -> SelectedLanguage.KOREAN
@@ -161,21 +201,29 @@ class MainActivity : AppCompatActivity(), SensorEventListener
         }
     }
 
-    private fun setLanguageViewBackground(language: SelectedLanguage) {
+    private fun setLanguageViewBackground(language: SelectedLanguage)
+    {
         // Reset background color for all language views
         resetLanguageViewBackground()
 
         // Set background color for the selected language view
-        val viewToHighlight = when (language) {
+        val viewToHighlight = when (language)
+        {
             SelectedLanguage.CHINESE -> chineseView
             SelectedLanguage.DEVANAGARI -> devanagariView
             SelectedLanguage.JAPANESE -> japaneseView
             SelectedLanguage.KOREAN -> koreanView
         }
-        viewToHighlight.setBackgroundColor(ContextCompat.getColor(this, com.google.android.material.R.color.abc_color_highlight_material))
+        viewToHighlight.setBackgroundColor(
+            ContextCompat.getColor(
+                this,
+                com.google.android.material.R.color.abc_color_highlight_material
+            )
+        )
     }
 
-    private fun resetLanguageViewBackground() {
+    private fun resetLanguageViewBackground()
+    {
         // Reset background color for all language views
         chineseView.setBackgroundColor(Color.TRANSPARENT)
         devanagariView.setBackgroundColor(Color.TRANSPARENT)
@@ -253,6 +301,47 @@ class MainActivity : AppCompatActivity(), SensorEventListener
     {
         activityResultLauncher.launch(REQUIRED_PERMISSIONS)
     }
+
+    private fun translateTextToPortuguese(text: String, callback: (String?) -> Unit)
+    {
+        CoroutineScope(Dispatchers.Main).launch {
+            // Define the chat completion request
+            val chatCompletionRequest = ChatCompletionRequest(
+                model = ModelId("gpt-3.5-turbo"),
+                messages = listOf(
+                    ChatMessage(
+                        role = ChatRole.System,
+                        content = "You are a translator, translate whatever the input is to Portuguese.\n$text"
+                    ),
+                )
+            )
+
+            val completion: ChatCompletion = openAI.chatCompletion(chatCompletionRequest)
+            val messageContent =
+                completion.choices.firstOrNull()?.message?.messageContent?.toString()
+
+            // Check if messageContent is not null and not empty
+            val content = messageContent?.let {
+                // Remove leading and trailing whitespaces and newlines
+                val trimmedContent = it.trim()
+
+                // Check if the trimmed content starts with 'TextContent(content=' and ends with ')'
+                if (trimmedContent.startsWith("TextContent(content=") && trimmedContent.endsWith(")"))
+                {
+                    // Get the substring between 'TextContent(content=' and ')'
+                    trimmedContent.substringAfter("TextContent(content=").substringBeforeLast(")")
+                }
+                else
+                {
+                    null
+                }
+            }
+
+            Log.i("debug_tag", "extracted content: \n$content")
+            callback(content)
+        }
+    }
+
 
     private val activityResultLauncher =
         registerForActivityResult(

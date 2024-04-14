@@ -77,4 +77,10 @@ dependencies {
 
     implementation "androidx.lifecycle:lifecycle-runtime-ktx:2.4.0"
 
+    // import Kotlin API client BOM
+    implementation platform('com.aallam.openai:openai-client-bom:3.7.1')
+
+    // define dependencies without versions
+    implementation 'com.aallam.openai:openai-client'
+    runtimeOnly 'io.ktor:ktor-client-okhttp'
 }
