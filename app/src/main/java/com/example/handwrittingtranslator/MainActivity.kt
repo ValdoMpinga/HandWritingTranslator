@@ -1,7 +1,13 @@
 package com.example.handwrittingtranslator
 
 import android.Manifest
+import android.content.ContentValues
 import android.content.pm.PackageManager
+import android.graphics.Color
+import android.hardware.Sensor
+import android.hardware.SensorEvent
+import android.hardware.SensorEventListener
+import android.hardware.SensorManager
 import android.os.Build
 import android.os.Bundle
 import android.os.CountDownTimer
@@ -17,23 +23,48 @@ import androidx.camera.core.Preview
 import androidx.camera.core.CameraSelector
 import android.util.Log
 import android.widget.TextView
+import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import com.example.handwrittingtranslator.databinding.ActivityMainBinding
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.TextRecognizer
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
+import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
+import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
+import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 
 
-class MainActivity : AppCompatActivity()
+
+class MainActivity : AppCompatActivity(), SensorEventListener
 {
     private lateinit var binding: ActivityMainBinding
     private lateinit var cameraExecutor: ExecutorService
     private var countdownTimer: CountDownTimer? = null
     private var imageCapture: ImageCapture? = null
-    private lateinit var translationText:  TextView
+    private lateinit var translationView : TextView
+    private lateinit var chineseView : TextView
+    private lateinit var devanagariView : TextView
+    private lateinit var japaneseView : TextView
+    private lateinit var koreanView : TextView
+    enum class SelectedLanguage {
+        CHINESE,
+        DEVANAGARI,
+        JAPANESE,
+        KOREAN
+    }
 
-    val recognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    lateinit var recognizerInstance: TextRecognizer
+    private val chineseRecognizer = TextRecognition.getClient(ChineseTextRecognizerOptions.Builder().build())
+    private val devanagariRecognizer = TextRecognition.getClient(DevanagariTextRecognizerOptions.Builder().build())
+    private val japaneseRecognizer = TextRecognition.getClient(JapaneseTextRecognizerOptions.Builder().build())
+    private val koreanRecognizer = TextRecognition.getClient(KoreanTextRecognizerOptions.Builder().build())
+
+
+    private lateinit var mSensorManager: SensorManager
+    private lateinit var mSensor: Sensor
+    private var selectedLanguage: SelectedLanguage = SelectedLanguage.CHINESE
 
 
     override fun onCreate(savedInstanceState: Bundle?)
@@ -42,9 +73,23 @@ class MainActivity : AppCompatActivity()
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
-        translationText = binding.tvTranslation
+        translationView  = binding.tvTranslation
+        chineseView = binding.tvChinese
+        devanagariView = binding.tvDevanagari
+        japaneseView = binding.tvJapanese
+        koreanView = binding.tvKorean
+
+        setLanguageViewBackground(selectedLanguage)
+
+
+        mSensorManager = getSystemService(SENSOR_SERVICE) as SensorManager
+        mSensor = mSensorManager.getDefaultSensor(Sensor.TYPE_PROXIMITY)
         cameraExecutor = Executors.newSingleThreadExecutor()
-        cameraExecutor = Executors.newSingleThreadExecutor()
+
+        if (mSensor == null) {
+            Toast.makeText(this, "Proximity sensor is not available on this device", Toast.LENGTH_SHORT).show()
+        }
+
         if (allPermissionsGranted())
         {
             startCamera()
@@ -56,16 +101,23 @@ class MainActivity : AppCompatActivity()
         }
     }
 
-
     private fun processFrame(image: ImageProxy)
     {
         val inputImage = InputImage.fromMediaImage(image.image!!, image.imageInfo.rotationDegrees)
 
-        recognizer.process(inputImage)
+        when (selectedLanguage){
+            SelectedLanguage.CHINESE -> recognizerInstance = chineseRecognizer
+            SelectedLanguage.DEVANAGARI -> recognizerInstance = devanagariRecognizer
+            SelectedLanguage.KOREAN -> recognizerInstance = koreanRecognizer
+            SelectedLanguage.JAPANESE -> recognizerInstance = japaneseRecognizer
+
+        }
+        recognizerInstance.process(inputImage)
             .addOnSuccessListener { visionText ->
                 val recognizedText = visionText.text
                 Log.d("debug_tag", "Recognizing text!")
-                translationText.text = recognizedText
+                Log.d("debug_tag", recognizedText)
+                translationView.text = recognizedText
 
             }
             .addOnFailureListener { e ->
@@ -74,6 +126,61 @@ class MainActivity : AppCompatActivity()
             .addOnCompleteListener {
                 image.close()
             }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mSensorManager.registerListener(this, mSensor, SensorManager.SENSOR_DELAY_NORMAL)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        mSensorManager.unregisterListener(this)
+    }
+
+
+    override fun onAccuracyChanged(sensor: Sensor?, accuracy: Int)
+    {
+        // Not used
+    }
+
+    override fun onSensorChanged(event: SensorEvent) {
+        if (event.sensor.type == Sensor.TYPE_PROXIMITY) {
+            val distance = event.values[0]
+            if (distance < mSensor.maximumRange) {
+                // Rotate to the next language in enum order
+                selectedLanguage = when (selectedLanguage) {
+                    SelectedLanguage.CHINESE -> SelectedLanguage.DEVANAGARI
+                    SelectedLanguage.DEVANAGARI -> SelectedLanguage.JAPANESE
+                    SelectedLanguage.JAPANESE -> SelectedLanguage.KOREAN
+                    SelectedLanguage.KOREAN -> SelectedLanguage.CHINESE
+                }
+                // Update background color
+                setLanguageViewBackground(selectedLanguage)
+            }
+        }
+    }
+
+    private fun setLanguageViewBackground(language: SelectedLanguage) {
+        // Reset background color for all language views
+        resetLanguageViewBackground()
+
+        // Set background color for the selected language view
+        val viewToHighlight = when (language) {
+            SelectedLanguage.CHINESE -> chineseView
+            SelectedLanguage.DEVANAGARI -> devanagariView
+            SelectedLanguage.JAPANESE -> japaneseView
+            SelectedLanguage.KOREAN -> koreanView
+        }
+        viewToHighlight.setBackgroundColor(ContextCompat.getColor(this, com.google.android.material.R.color.abc_color_highlight_material))
+    }
+
+    private fun resetLanguageViewBackground() {
+        // Reset background color for all language views
+        chineseView.setBackgroundColor(Color.TRANSPARENT)
+        devanagariView.setBackgroundColor(Color.TRANSPARENT)
+        japaneseView.setBackgroundColor(Color.TRANSPARENT)
+        koreanView.setBackgroundColor(Color.TRANSPARENT)
     }
 
     private fun startCamera()
